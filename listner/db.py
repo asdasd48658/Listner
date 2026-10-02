@@ -146,7 +146,8 @@ class Store:
             else:
                 row = self._execute(con, "DELETE FROM call_presence WHERE group_id=? AND call_id=? AND telegram_user_id=? RETURNING joined_at", (group_id, call_id, user_id)).fetchone()
                 if row:
-                    joined_at = row["joined_at"] if self.is_postgres else row[0]\n                    seconds = now - joined_at
+                    joined_at = row["joined_at"] if self.is_postgres else row[0]
+                    seconds = now - joined_at
                     self._execute(con, "INSERT INTO alerts(kind,group_id,call_id,telegram_user_id,body,created_at) VALUES ('left',?,?,?,?,?)", (group_id, call_id, user_id, f"{body} after {seconds}s", now))
                     return ("left", seconds)
         return None
