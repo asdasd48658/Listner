@@ -1,0 +1,14 @@
+services:
+  worker:
+    build: .
+    env_file: .env
+    volumes:
+      - listner-data:/data
+  bot-control:
+    build: .
+    command: python -m listner.bot
+    env_file: .env
+    volumes:
+      - listner-data:/data
+volumes:
+  listner-data:
