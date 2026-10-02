@@ -1,9 +1,9 @@
 services:
   - type: worker
-    name: listner-worker
+    name: listner
     runtime: docker
     dockerfilePath: ./Dockerfile
-    dockerCommand: python -m listner.worker
+    dockerCommand: python -m listner.supervisor
     autoDeploy: true
     envVars:
       - key: TELEGRAM_API_ID
@@ -30,19 +30,3 @@ services:
       name: telethon-session
       mountPath: /data
       sizeGB: 1
-
-  - type: worker
-    name: listner-bot
-    runtime: docker
-    dockerfilePath: ./Dockerfile
-    dockerCommand: python -m listner.bot
-    autoDeploy: true
-    envVars:
-      - key: DATABASE_URL
-        sync: false
-      - key: BOT_TOKEN
-        sync: false
-      - key: BOT_CHAT_ID
-        sync: false
-      - key: CONTROL_SECRET
-        sync: false
