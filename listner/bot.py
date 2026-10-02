@@ -7,7 +7,7 @@ from .db import Store
 def request(token, method, data):
     return json.loads(urllib.request.urlopen(f"https://api.telegram.org/bot{token}/{method}", urllib.parse.urlencode(data).encode(), timeout=35).read())
 def main():
-    s=Settings(); db=Store(s.database_path); db.initialize(); offset=0
+    s=Settings(); db=Store(s.database); db.initialize(); offset=0
     if not s.bot_token: raise RuntimeError("BOT_TOKEN is required")
     while True:
       for update in request(s.bot_token, 'getUpdates', {'offset':offset,'timeout':30}).get('result',[]):

@@ -6,6 +6,11 @@ class MonitorLeaseTests(unittest.TestCase):
         self.file=tempfile.NamedTemporaryFile(delete=False); self.file.close()
         self.db=Store(self.file.name); self.db.initialize()
     def tearDown(self): os.unlink(self.file.name)
+    def test_schema_initialization_and_watching_are_idempotent(self):
+        self.db.initialize()
+        self.db.add_watched(9, 'Alice')
+        self.db.add_watched(9, 'Alice again')
+        self.assertEqual([9], self.db.watched())
     def test_only_one_owner_can_acquire_same_group_call(self):
         self.assertEqual('worker-a', self.db.acquire_monitor(100, 200, 1, owner='worker-a', now=100, lease_seconds=10))
         self.assertIsNone(self.db.acquire_monitor(100, 200, 1, owner='worker-b', now=101, lease_seconds=10))
@@ -27,6 +32,10 @@ class MonitorLeaseTests(unittest.TestCase):
         self.db.acquire_monitor(100, 200, 1, owner='b', now=106, lease_seconds=5)
         self.assertFalse(self.db.renew_monitor(100, 200, 'a', 5, now=106))
         self.assertTrue(self.db.renew_monitor(100, 200, 'b', 5, now=106))
+    def test_current_owner_can_renew_its_unexpired_lease(self):
+        self.db.acquire_monitor(100, 200, 1, owner='a', now=100, lease_seconds=5)
+        self.assertTrue(self.db.renew_monitor(100, 200, 'a', 10, now=104))
+        self.assertIsNone(self.db.acquire_monitor(100, 200, 1, owner='b', now=110, lease_seconds=5))
     def test_online_status_alerts_for_initial_online_and_later_transitions(self):
         self.assertIsNone(self.db.record_online_status(9, False, now=100))
         self.assertIsNone(self.db.record_online_status(9, False, now=101))
@@ -49,4 +58,14 @@ class MonitorLeaseTests(unittest.TestCase):
         with self.db.connection() as con:
             alerts = con.execute('SELECT kind FROM alerts ORDER BY id').fetchall()
         self.assertEqual([('online',), ('joined',)], [tuple(x) for x in alerts])
+    def test_initial_absence_does_not_emit_a_leave_alert(self):
+        self.assertIsNone(self.db.record_presence(100, 200, 9, False, '9 in Team', now=100))
+        self.assertEqual([], self.db.pending_alerts())
+    def test_alerts_remain_pending_until_marked_delivered(self):
+        self.db.record_presence(100, 200, 9, True, '9 in Team', now=100)
+        alert = self.db.pending_alerts()[0]
+        self.assertEqual('joined', alert['kind'])
+        self.assertEqual(1, len(self.db.pending_alerts()))
+        self.db.mark_delivered(alert['id'])
+        self.assertEqual([], self.db.pending_alerts())
 if __name__=='__main__': unittest.main()

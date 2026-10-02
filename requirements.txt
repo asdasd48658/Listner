@@ -1,1 +1,2 @@
 Telethon>=1.36,<2
+psycopg[binary]>=3.2,<4

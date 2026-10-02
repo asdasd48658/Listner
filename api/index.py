@@ -1,4 +1,4 @@
-"""Vercel Python serverless control API. SQLite must be mounted/shared with the worker."""
+"""Vercel Python serverless control API backed by the shared database."""
 from http.server import BaseHTTPRequestHandler
 import json, os
 from listner.config import Settings
@@ -10,7 +10,7 @@ class handler(BaseHTTPRequestHandler):
     def _store(self):
         s=Settings()
         if s.control_secret and self.headers.get('Authorization') != f'Bearer {s.control_secret}': self._send(401,{'error':'unauthorized'}); return None
-        db=Store(s.database_path); db.initialize(); return db
+        db=Store(s.database); db.initialize(); return db
     def do_GET(self):
         db=self._store()
         if db: self._send(200, {'watched_user_ids':db.watched(), 'groups':[dict(x) for x in db.groups()]})
