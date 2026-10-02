@@ -25,7 +25,6 @@ def request(token: str, method: str, data: dict):
         safe_data["chat_id"] = str(safe_data["chat_id"])
     log.info("Telegram request: %s data=%s", method, safe_data)
     started = time.monotonic()
-
     payload = urllib.parse.urlencode(data).encode()
     try:
         with urllib.request.urlopen(url, payload, timeout=35) as response:
@@ -33,14 +32,8 @@ def request(token: str, method: str, data: dict):
     except Exception:
         log.exception("Telegram request FAILED: %s (%.3fs)", method, time.monotonic() - started)
         raise
-
     elapsed = time.monotonic() - started
-    log.info(
-        "Telegram response: %s ok=%s elapsed=%.3fs",
-        method,
-        result.get("ok"),
-        elapsed,
-    )
+    log.info("Telegram response: %s ok=%s elapsed=%.3fs", method, result.get("ok"), elapsed)
     if not result.get("ok", False):
         log.error("Telegram API error: method=%s result=%s", method, result)
         raise RuntimeError(f"Telegram {method} failed: {result}")
@@ -110,16 +103,9 @@ def main():
     s = Settings()
     if not s.bot_token:
         raise RuntimeError("BOT_TOKEN is required")
-
     db = Store(s.database)
     db.initialize()
     offset = 0
-
-    try:
-        request(s.bot_token, "deleteWebhook", {"drop_pending_updates": False})
-    except Exception:
-        log.exception("Unable to clear Telegram webhook")
-
     log.info("Listner bot started; database=%s", "postgres" if db.is_postgres else "sqlite")
 
     while True:
@@ -131,30 +117,18 @@ def main():
                 {"offset": offset, "timeout": 25, "allowed_updates": json.dumps(["message"])},
             ).get("result", [])
             log.info("Telegram poll returned %d update(s)", len(updates))
-
             for update in updates:
                 offset = update["update_id"] + 1
                 message = update.get("message", {})
                 chat = str(message.get("chat", {}).get("id", ""))
                 text = message.get("text", "")
-
-                log.info(
-                    "Received update=%s chat=%s text=%r",
-                    update.get("update_id"),
-                    chat,
-                    text,
-                )
-
+                log.info("Received update=%s chat=%s text=%r", update.get("update_id"), chat, text)
                 if not chat:
                     log.warning("Ignoring update without chat id")
                     continue
                 if s.bot_chat_id and chat != s.bot_chat_id:
-                    log.warning(
-                        "Ignoring chat=%s because BOT_CHAT_ID is configured",
-                        chat,
-                    )
+                    log.warning("Ignoring chat=%s because BOT_CHAT_ID is configured", chat)
                     continue
-
                 try:
                     reply = handle_message(db, text)
                     log.info("Command %r produced reply=%r", text, reply)
@@ -162,14 +136,9 @@ def main():
                 except Exception:
                     log.exception("Failed to process bot command: %r", text)
                     try:
-                        send_reply(
-                            s.bot_token,
-                            chat,
-                            "Listner error: command could not be processed.",
-                        )
+                        send_reply(s.bot_token, chat, "Listner error: command could not be processed.")
                     except Exception:
                         log.exception("Failed to send error reply")
-
         except (urllib.error.URLError, TimeoutError, OSError):
             log.exception("Telegram polling/network error")
             time.sleep(2)
