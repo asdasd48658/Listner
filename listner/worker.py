@@ -1,6 +1,6 @@
 from __future__ import annotations
 import asyncio, json, logging, urllib.parse, urllib.request
-from telethon import TelegramClient, events, functions, types
+from telethon import TelegramClient, StringSession, events, functions, types
 from .config import Settings
 from .db import Store
 log = logging.getLogger(__name__)
@@ -9,7 +9,8 @@ class ListnerWorker:
     def __init__(self, settings: Settings):
         if not settings.telegram_api_id or not settings.telegram_api_hash: raise RuntimeError("TELEGRAM_API_ID and TELEGRAM_API_HASH are required")
         self.s, self.db = settings, Store(settings.database)
-        self.client = TelegramClient(settings.telegram_session, settings.telegram_api_id, settings.telegram_api_hash)
+        session = StringSession(settings.telegram_session_string) if settings.telegram_session_string else settings.telegram_session
+        self.client = TelegramClient(session, settings.telegram_api_id, settings.telegram_api_hash)
 
     async def handle_user_update(self, event: events.UserUpdate.Event) -> None:
         """Queue an alert only when a watched user's reported status changes."""
