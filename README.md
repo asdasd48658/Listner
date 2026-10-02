@@ -5,14 +5,14 @@ Listner monitors watched numeric Telegram user IDs through a **Telethon user acc
 ## Architecture and guarantees
 
 - The worker discovers shared groups with Telegram `messages.GetCommonChats` for each watched account, then checks channel full-info for active group calls.
-- Each active `(group_id, call_id)` is protected by SQLite's `PRIMARY KEY (group_id, call_id)` plus an atomic conditional UPSERT lease. Only its successful holder polls participants, renews its lease before each approximately two-second poll, and reports presence transitions.
-- Join state and alerts are durable in SQLite, so only transitions produce alerts; leave alerts include the measured duration.
+- PostgreSQL is the shared production database between the Vercel control API and the persistent worker. Each active `(group_id, call_id)` is protected by its database primary key plus an atomic conditional UPSERT lease. Only its successful holder polls participants, renews its lease before each approximately two-second poll, and reports presence transitions.
+- Join state and alerts are durable in PostgreSQL, so only transitions produce alerts; leave alerts include the measured duration.
 - User-status alerts are likewise durable: a first observed online status and every later online/offline transition generate one alert each. An initial offline status establishes a baseline so a worker restart does not send a false offline alert. Telegram only supplies user-status updates that the signed-in account is permitted to see, so privacy settings and account relationship can limit these alerts.
-- The worker needs a persistent disk/volume. **Vercel's filesystem is ephemeral**: deploy the control API there only if `DATABASE_PATH` points to shared persistent storage (or use it only as a stateless control deployment paired with a shared database adapter). The included SQLite worker is intended for Docker with its named volume.
+- The worker needs a persistent disk/volume only for its Telethon session. **Vercel's filesystem is ephemeral**, so deploy the control API there with the same external `DATABASE_URL` as the worker. The Telethon worker must run on an always-on, persistent runtime. SQLite is available only when an explicit `DATABASE_PATH` is set for local development.
 
 ## Setup
 
-1. Create Telegram API credentials at [my.telegram.org](https://my.telegram.org), create a bot with BotFather, and copy `.env.example` to `.env`.
+1. Create a managed PostgreSQL database (for example, Neon or Supabase), create Telegram API credentials at [my.telegram.org](https://my.telegram.org), create a bot with BotFather, and copy `.env.example` to `.env`. Set `DATABASE_URL` to a URL such as `postgresql://listner:password@db.example.com:5432/listner?sslmode=require`.
 2. Set `BOT_CHAT_ID` to the administrator chat ID. Start the worker locally once with `python -m listner.worker` and complete Telethon's interactive user-account sign-in; retain the created session file.
 3. Start the durable services:
    ```sh
@@ -24,7 +24,7 @@ Listner monitors watched numeric Telegram user IDs through a **Telethon user acc
 
 `api/index.py` accepts `GET /` for status, `POST /watch` with `{"telegram_user_id": 123}`, and `POST /unwatch`. Set `Authorization: Bearer $CONTROL_SECRET` when configured.
 
-Deploy the API with `vercel --prod` after setting `CONTROL_SECRET` and a suitable database configuration in Vercel environment variables. Continue deploying the Docker worker somewhere with persistent storage; Vercel does not run the forever Telethon worker.
+Deploy the API with `vercel --prod` after setting `DATABASE_URL` and `CONTROL_SECRET` in Vercel environment variables. Give the worker the exact same `DATABASE_URL`, while keeping its Telethon session on persistent storage; Vercel does not run the forever Telethon worker. Never commit `.env`, Telegram API hashes, bot tokens, Telethon session strings, or database credentials.
 
 ## Development
 
