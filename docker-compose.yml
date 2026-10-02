@@ -4,10 +4,12 @@ services:
     env_file: .env
     volumes:
       - listner-session:/data
+
   bot-control:
     build: .
     command: python -m listner.bot
     env_file: .env
     # DATABASE_URL is shared with the worker; this service has no database volume.
+
 volumes:
   listner-session:
