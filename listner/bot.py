@@ -1,4 +1,4 @@
-"""Telegram Bot API control loop for Listner."""
+""""Telegram Bot API control loop for Listner."""
 from __future__ import annotations
 
 import asyncio
@@ -11,7 +11,7 @@ import urllib.request
 
 from .config import Settings
 from .db import Store
-from telethon import TelegramClient
+from telethon import TelegramClient, functions
 from telethon.sessions import StringSession
 
 logging.basicConfig(
@@ -44,7 +44,7 @@ def request(token: str, method: str, data: dict):
 
 
 def send_reply(token: str, chat_id: str, text: str) -> None:
-    log.info("Sending reply to chat=%s: %s", chat_id, text.replace("\n", " | "))
+    log.info("Sending reply to chat=%s: %s", chat_id, text.replace("\\n", " | "))
     request(token, "sendMessage", {"chat_id": chat_id, "text": text})
 
 
@@ -54,7 +54,6 @@ def command_and_args(text: str) -> tuple[str, list[str]]:
         return "", []
     command = words[0].split("@", 1)[0].lower()
     return command, words[1:]
-
 
 
 async def _telegram_contacts(settings: Settings):
@@ -73,7 +72,11 @@ async def _telegram_contacts(settings: Settings):
             raise RuntimeError("Telethon user session is not authorized")
         if await client.is_bot():
             raise RuntimeError("TELEGRAM_SESSION_STRING must belong to the user account")
-        return await client.get_contacts()
+        # Telethon 1.x exposes contacts through the raw API rather than
+        # TelegramClient.get_contacts(). GetContactsRequest returns the
+        # contact users in the response.
+        result = await client(functions.contacts.GetContactsRequest(hash=0))
+        return result.users
     finally:
         await client.disconnect()
 
@@ -91,7 +94,8 @@ def contact_list(settings: Settings) -> str:
             f"   ID: {user.id}",
             f"   /watch {user.id}",
         ))
-    return "\n".join(lines)
+    return "\\n".join(lines)
+
 
 def handle_message(db: Store, text: str, settings: Settings) -> str:
     command, args = command_and_args(text)
@@ -99,10 +103,10 @@ def handle_message(db: Store, text: str, settings: Settings) -> str:
 
     if command in {"/start", "/help"}:
         return (
-            "Listner commands:\n"
-            "/watch <numeric_user_id> [name] — add a listener\n"
-            "/unwatch <numeric_user_id> — remove a listener\n"
-            "/list — show all listeners\n"
+            "Listner commands:\\n"
+            "/watch <numeric_user_id> [name] — add a listener\\n"
+            "/unwatch <numeric_user_id> — remove a listener\\n"
+            "/list — show all listeners\\n"
             "/contacts — show Telegram contacts and numeric IDs"
         )
 
@@ -139,7 +143,7 @@ def handle_message(db: Store, text: str, settings: Settings) -> str:
         log.info("Listener list loaded: count=%d elapsed=%.3fs", len(users), time.monotonic() - started)
         if not users:
             return "Listeners: none"
-        return "Listeners:\n" + "\n".join(
+        return "Listeners:\\n" + "\\n".join(
             f"{index}. {user_id}" for index, user_id in enumerate(users, 1)
         )
 
@@ -197,3 +201,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+"
