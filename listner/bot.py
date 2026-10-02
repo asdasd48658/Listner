@@ -1,6 +1,7 @@
 """Telegram Bot API control loop for Listner."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -10,6 +11,8 @@ import urllib.request
 
 from .config import Settings
 from .db import Store
+from telethon import TelegramClient
+from telethon.sessions import StringSession
 
 logging.basicConfig(
     level=logging.INFO,
@@ -53,7 +56,44 @@ def command_and_args(text: str) -> tuple[str, list[str]]:
     return command, words[1:]
 
 
-def handle_message(db: Store, text: str) -> str:
+
+async def _telegram_contacts(settings: Settings):
+    if not settings.telegram_api_id or not settings.telegram_api_hash:
+        raise RuntimeError("TELEGRAM_API_ID and TELEGRAM_API_HASH are required")
+    if not settings.telegram_session_string:
+        raise RuntimeError("TELEGRAM_SESSION_STRING is required")
+    client = TelegramClient(
+        StringSession(settings.telegram_session_string),
+        settings.telegram_api_id,
+        settings.telegram_api_hash,
+    )
+    try:
+        await client.connect()
+        if not await client.is_user_authorized():
+            raise RuntimeError("Telethon user session is not authorized")
+        if await client.is_bot():
+            raise RuntimeError("TELEGRAM_SESSION_STRING must belong to the user account")
+        return await client.get_contacts()
+    finally:
+        await client.disconnect()
+
+
+def contact_list(settings: Settings) -> str:
+    users = asyncio.run(_telegram_contacts(settings))
+    if not users:
+        return "Telegram contacts: none"
+    lines = ["Telegram contacts:"]
+    for index, user in enumerate(users, 1):
+        name = " ".join(x for x in (user.first_name, user.last_name) if x) or "(no name)"
+        username = f" @{user.username}" if user.username else ""
+        lines.extend((
+            f"{index}. {name}{username}",
+            f"   ID: {user.id}",
+            f"   /watch {user.id}",
+        ))
+    return "\n".join(lines)
+
+def handle_message(db: Store, text: str, settings: Settings) -> str:
     command, args = command_and_args(text)
     log.info("Handling command: %s args=%s", command, args)
 
@@ -62,7 +102,8 @@ def handle_message(db: Store, text: str) -> str:
             "Listner commands:\n"
             "/watch <numeric_user_id> [name] — add a listener\n"
             "/unwatch <numeric_user_id> — remove a listener\n"
-            "/list — show all listeners"
+            "/list — show all listeners\n"
+            "/contacts — show Telegram contacts and numeric IDs"
         )
 
     if command in {"/watch", "/add"}:
@@ -83,6 +124,13 @@ def handle_message(db: Store, text: str) -> str:
         log.info("Removing listener: user_id=%s", user_id)
         removed = db.remove_watched(user_id)
         return f"Removed {user_id}" if removed else f"{user_id} was not in the listener list"
+
+    if command == "/contacts":
+        try:
+            return contact_list(settings)
+        except Exception as exc:
+            log.exception("Failed to fetch Telegram contacts")
+            return f"Could not fetch Telegram contacts: {exc}"
 
     if command == "/list":
         log.info("Fetching listener list from database")
@@ -130,7 +178,7 @@ def main():
                     log.warning("Ignoring chat=%s because BOT_CHAT_ID is configured", chat)
                     continue
                 try:
-                    reply = handle_message(db, text)
+                    reply = handle_message(db, text, s)
                     log.info("Command %r produced reply=%r", text, reply)
                     send_reply(s.bot_token, chat, reply)
                 except Exception:
