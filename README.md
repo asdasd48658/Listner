@@ -1,12 +1,13 @@
 # Listner
 
-Listner monitors active Telegram group voice/video calls through a **Telethon user account** and sends join/leave alerts for watched numeric Telegram user IDs. A separate Telegram Bot API process and a small Vercel-compatible control API manage the watch list.
+Listner monitors watched numeric Telegram user IDs through a **Telethon user account**. It sends alerts when Telegram reports that a watched user comes online or goes offline, and when they join or leave an active shared group voice/video call. A separate Telegram Bot API process and a small Vercel-compatible control API manage the watch list.
 
 ## Architecture and guarantees
 
 - The worker discovers shared groups with Telegram `messages.GetCommonChats` for each watched account, then checks channel full-info for active group calls.
 - Each active `(group_id, call_id)` is protected by SQLite's `PRIMARY KEY (group_id, call_id)` plus an atomic conditional UPSERT lease. Only its successful holder polls participants, renews its lease before each approximately two-second poll, and reports presence transitions.
 - Join state and alerts are durable in SQLite, so only transitions produce alerts; leave alerts include the measured duration.
+- User-status alerts are likewise durable: a first observed online status and every later online/offline transition generate one alert each. An initial offline status establishes a baseline so a worker restart does not send a false offline alert. Telegram only supplies user-status updates that the signed-in account is permitted to see, so privacy settings and account relationship can limit these alerts.
 - The worker needs a persistent disk/volume. **Vercel's filesystem is ephemeral**: deploy the control API there only if `DATABASE_PATH` points to shared persistent storage (or use it only as a stateless control deployment paired with a shared database adapter). The included SQLite worker is intended for Docker with its named volume.
 
 ## Setup

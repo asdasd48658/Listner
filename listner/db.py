@@ -36,6 +36,11 @@ CREATE TABLE IF NOT EXISTS call_presence (
   joined_at INTEGER NOT NULL,
   PRIMARY KEY (group_id, call_id, telegram_user_id)
 );
+CREATE TABLE IF NOT EXISTS user_statuses (
+  telegram_user_id INTEGER PRIMARY KEY,
+  is_online INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS alerts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   kind TEXT NOT NULL,
@@ -78,6 +83,36 @@ class Store:
     def remove_watched(self, user_id: int) -> bool:
         with self.connection() as con:
             return con.execute("DELETE FROM watched_contacts WHERE telegram_user_id=?", (user_id,)).rowcount > 0
+
+    def record_online_status(self, user_id: int, is_online: bool, now: int | None = None) -> str | None:
+        """Persist a watched user's status and return an online/offline alert when appropriate."""
+        now = int(time.time()) if now is None else now
+        online = int(is_online)
+        with self.connection() as con:
+            row = con.execute(
+                "SELECT is_online FROM user_statuses WHERE telegram_user_id=?", (user_id,)
+            ).fetchone()
+            if row is None:
+                con.execute(
+                    "INSERT INTO user_statuses VALUES (?, ?, ?)", (user_id, online, now)
+                )
+                # A first online observation is actionable; an initial offline status only
+                # establishes a baseline so starting the worker does not send false leave alerts.
+                if not is_online:
+                    return None
+            elif row["is_online"] == online:
+                return None
+            else:
+                con.execute(
+                    "UPDATE user_statuses SET is_online=?, updated_at=? WHERE telegram_user_id=?",
+                    (online, now, user_id),
+                )
+            kind = "online" if is_online else "offline"
+            con.execute(
+                "INSERT INTO alerts(kind,group_id,call_id,telegram_user_id,body,created_at) VALUES (?,?,?,?,?,?)",
+                (kind, 0, 0, user_id, f"{user_id} is now {kind}", now),
+            )
+            return kind
 
     def save_group(self, group_id: int, title: str) -> None:
         with self.connection() as con:
