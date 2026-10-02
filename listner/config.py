@@ -21,6 +21,7 @@ class Settings:
     telegram_api_id: int | None = int(os.environ["TELEGRAM_API_ID"]) if os.getenv("TELEGRAM_API_ID") else None
     telegram_api_hash: str | None = os.getenv("TELEGRAM_API_HASH")
     telegram_session: str = os.getenv("TELEGRAM_SESSION", "/data/telethon.session")
+    telegram_session_string: str | None = os.getenv("TELEGRAM_SESSION_STRING")
     bot_token: str | None = os.getenv("BOT_TOKEN")
     bot_chat_id: str | None = os.getenv("BOT_CHAT_ID")
     bot_webhook_secret: str | None = os.getenv("BOT_WEBHOOK_SECRET")
