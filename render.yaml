@@ -2,6 +2,7 @@ services:
   - type: worker
     name: listner
     runtime: docker
+    plan: starter
     dockerfilePath: ./Dockerfile
     dockerCommand: python -m listner.supervisor
     autoDeploy: true
