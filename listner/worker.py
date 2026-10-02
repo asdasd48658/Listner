@@ -10,7 +10,9 @@ class ListnerWorker:
     def __init__(self, settings: Settings):
         if not settings.telegram_api_id or not settings.telegram_api_hash: raise RuntimeError("TELEGRAM_API_ID and TELEGRAM_API_HASH are required")
         self.s, self.db = settings, Store(settings.database)
-        session = StringSession(settings.telegram_session_string) if settings.telegram_session_string else settings.telegram_session
+        if not settings.telegram_session_string:
+            raise RuntimeError("TELEGRAM_SESSION_STRING is required on Render Free; generate an authenticated Telethon StringSession and set it in Render")
+        session = StringSession(settings.telegram_session_string)
         self.client = TelegramClient(session, settings.telegram_api_id, settings.telegram_api_hash)
 
     async def handle_user_update(self, event: events.UserUpdate.Event) -> None:
