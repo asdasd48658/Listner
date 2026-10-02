@@ -1,4 +1,4 @@
-""""Telegram Bot API control loop for Listner."""
+"""Telegram Bot API control loop for Listner."""
 from __future__ import annotations
 
 import asyncio
@@ -201,4 +201,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-"
