@@ -12,6 +12,8 @@ services:
         sync: false
       - key: TELEGRAM_SESSION
         value: /data/telethon.session
+      - key: TELEGRAM_SESSION_STRING
+        sync: false
       - key: DATABASE_URL
         sync: false
       - key: BOT_TOKEN
