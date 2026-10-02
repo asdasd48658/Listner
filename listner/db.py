@@ -80,7 +80,7 @@ class Store:
 
     def watched(self) -> list[int]:
         with self.connection() as con:
-            return [r[0] for r in self._execute(con, "SELECT telegram_user_id FROM watched_contacts")]
+            return [r["telegram_user_id"] if self.is_postgres else r[0] for r in self._execute(con, "SELECT telegram_user_id FROM watched_contacts")]
 
     def add_watched(self, user_id: int, name: str = "") -> None:
         with self.connection() as con:
@@ -146,7 +146,7 @@ class Store:
             else:
                 row = self._execute(con, "DELETE FROM call_presence WHERE group_id=? AND call_id=? AND telegram_user_id=? RETURNING joined_at", (group_id, call_id, user_id)).fetchone()
                 if row:
-                    seconds = now - row[0]
+                    joined_at = row["joined_at"] if self.is_postgres else row[0]\n                    seconds = now - joined_at
                     self._execute(con, "INSERT INTO alerts(kind,group_id,call_id,telegram_user_id,body,created_at) VALUES ('left',?,?,?,?,?)", (group_id, call_id, user_id, f"{body} after {seconds}s", now))
                     return ("left", seconds)
         return None
