@@ -1,8 +1,7 @@
 services:
-  - type: worker
+  - type: web
     name: listner
     runtime: docker
-    plan: starter
     dockerfilePath: ./Dockerfile
     dockerCommand: python -m listner.supervisor
     autoDeploy: true
@@ -11,8 +10,6 @@ services:
         sync: false
       - key: TELEGRAM_API_HASH
         sync: false
-      - key: TELEGRAM_SESSION
-        value: /data/telethon.session
       - key: TELEGRAM_SESSION_STRING
         sync: false
       - key: DATABASE_URL
@@ -27,7 +24,3 @@ services:
         value: "2"
       - key: LEASE_SECONDS
         value: "10"
-    disk:
-      name: telethon-session
-      mountPath: /data
-      sizeGB: 1
