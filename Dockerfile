@@ -4,4 +4,4 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY listner ./listner
 RUN mkdir -p /data
-CMD ["python", "-m", "listner.worker"]
+CMD ["python", "-m", "listner.supervisor"]
