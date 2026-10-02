@@ -27,4 +27,26 @@ class MonitorLeaseTests(unittest.TestCase):
         self.db.acquire_monitor(100, 200, 1, owner='b', now=106, lease_seconds=5)
         self.assertFalse(self.db.renew_monitor(100, 200, 'a', 5, now=106))
         self.assertTrue(self.db.renew_monitor(100, 200, 'b', 5, now=106))
+    def test_online_status_alerts_for_initial_online_and_later_transitions(self):
+        self.assertIsNone(self.db.record_online_status(9, False, now=100))
+        self.assertIsNone(self.db.record_online_status(9, False, now=101))
+        self.assertEqual('online', self.db.record_online_status(9, True, now=102))
+        self.assertIsNone(self.db.record_online_status(9, True, now=103))
+        self.assertEqual('offline', self.db.record_online_status(9, False, now=104))
+        self.assertEqual('online', self.db.record_online_status(10, True, now=105))
+        with self.db.connection() as con:
+            alerts = con.execute('SELECT kind, body FROM alerts ORDER BY id').fetchall()
+        self.assertEqual(
+            [('online', '9 is now online'), ('offline', '9 is now offline'), ('online', '10 is now online')],
+            [tuple(x) for x in alerts],
+        )
+    def test_online_and_call_join_each_queue_an_alert(self):
+        self.assertEqual('online', self.db.record_online_status(9, True, now=100))
+        self.assertEqual(
+            ('joined', 0),
+            self.db.record_presence(100, 200, 9, True, '9 in Team', now=101),
+        )
+        with self.db.connection() as con:
+            alerts = con.execute('SELECT kind FROM alerts ORDER BY id').fetchall()
+        self.assertEqual([('online',), ('joined',)], [tuple(x) for x in alerts])
 if __name__=='__main__': unittest.main()

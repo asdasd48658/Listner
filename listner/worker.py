@@ -1,6 +1,6 @@
 from __future__ import annotations
 import asyncio, json, logging, urllib.parse, urllib.request
-from telethon import TelegramClient, functions, types
+from telethon import TelegramClient, events, functions, types
 from .config import Settings
 from .db import Store
 log = logging.getLogger(__name__)
@@ -10,6 +10,13 @@ class ListnerWorker:
         if not settings.telegram_api_id or not settings.telegram_api_hash: raise RuntimeError("TELEGRAM_API_ID and TELEGRAM_API_HASH are required")
         self.s, self.db = settings, Store(settings.database_path)
         self.client = TelegramClient(settings.telegram_session, settings.telegram_api_id, settings.telegram_api_hash)
+
+    async def handle_user_update(self, event: events.UserUpdate.Event) -> None:
+        """Queue an alert only when a watched user's reported status changes."""
+        if event.user_id not in self.db.watched():
+            return
+        if self.db.record_online_status(event.user_id, event.online):
+            await self.deliver_alerts()
 
     async def discover_groups(self) -> None:
         """Use Telegram's GetCommonChats for every watched numeric account ID."""
@@ -49,15 +56,21 @@ class ListnerWorker:
     async def deliver_alerts(self) -> None:
         if not (self.s.bot_token and self.s.bot_chat_id): return
         for alert in self.db.pending_alerts():
-            text = (f"🔔 Watched user {alert['telegram_user_id']} joined: {alert['body']}" if alert['kind']=='joined'
-                    else f"👋 Watched user {alert['telegram_user_id']} left: {alert['body']}")
+            if alert['kind'] == 'joined':
+                text = f"🔔 Watched user {alert['telegram_user_id']} joined: {alert['body']}"
+            elif alert['kind'] == 'left':
+                text = f"👋 Watched user {alert['telegram_user_id']} left: {alert['body']}"
+            else:
+                text = f"🟢 Watched user {alert['telegram_user_id']} is online" if alert['kind'] == 'online' else f"⚫ Watched user {alert['telegram_user_id']} is offline"
             try:
                 payload = urllib.parse.urlencode({'chat_id':self.s.bot_chat_id, 'text':text}).encode()
                 urllib.request.urlopen(f"https://api.telegram.org/bot{self.s.bot_token}/sendMessage", payload, timeout=10).read()
                 self.db.mark_delivered(alert['id'])
             except Exception as exc: log.warning("alert delivery failed: %s", exc)
     async def run(self) -> None:
-        self.db.initialize(); await self.client.start()
+        self.db.initialize()
+        self.client.add_event_handler(self.handle_user_update, events.UserUpdate)
+        await self.client.start()
         while True:
             await self.discover_groups(); await self.scan_calls(); await self.deliver_alerts()
             await asyncio.sleep(max(5, self.s.poll_seconds))
