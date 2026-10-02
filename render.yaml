@@ -1,0 +1,46 @@
+services:
+  - type: worker
+    name: listner-worker
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerCommand: python -m listner.worker
+    autoDeploy: true
+    envVars:
+      - key: TELEGRAM_API_ID
+        sync: false
+      - key: TELEGRAM_API_HASH
+        sync: false
+      - key: TELEGRAM_SESSION
+        value: /data/telethon.session
+      - key: DATABASE_URL
+        sync: false
+      - key: BOT_TOKEN
+        sync: false
+      - key: BOT_CHAT_ID
+        sync: false
+      - key: CONTROL_SECRET
+        sync: false
+      - key: POLL_SECONDS
+        value: "2"
+      - key: LEASE_SECONDS
+        value: "10"
+    disk:
+      name: telethon-session
+      mountPath: /data
+      sizeGB: 1
+
+  - type: worker
+    name: listner-bot
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerCommand: python -m listner.bot
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: BOT_TOKEN
+        sync: false
+      - key: BOT_CHAT_ID
+        sync: false
+      - key: CONTROL_SECRET
+        sync: false
