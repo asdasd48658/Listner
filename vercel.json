@@ -1,0 +1,1 @@
+{"version":2,"functions":{"api/index.py":{"runtime":"@vercel/python"}},"rewrites":[{"source":"/(.*)","destination":"/api/index.py"}]}
