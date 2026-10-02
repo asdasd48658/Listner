@@ -84,17 +84,19 @@ async def _telegram_contacts(settings: Settings):
 def contact_list(settings: Settings) -> str:
     users = asyncio.run(_telegram_contacts(settings))
     if not users:
-        return "Telegram contacts: none"
-    lines = ["Telegram contacts:"]
+        return "Telegram Contacts: none"
+    lines = [
+        "Telegram Contacts",
+        "",
+        "No. | Contact Name | Username | User ID",
+        "----|--------------|----------|--------",
+    ]
     for index, user in enumerate(users, 1):
         name = " ".join(x for x in (user.first_name, user.last_name) if x) or "(no name)"
-        username = f" @{user.username}" if user.username else ""
-        lines.extend((
-            f"{index}. {name}{username}",
-            f"   ID: {user.id}",
-            f"   /watch {user.id}",
-        ))
-    return "\\n".join(lines)
+        username = f"@{user.username}" if user.username else "(none)"
+        lines.append(f"{index} | {name} | {username} | {user.id}")
+    lines.extend(("", "Use: /watch <user_id> [name]"))
+    return "\n".join(lines)
 
 
 def handle_message(db: Store, text: str, settings: Settings) -> str:
@@ -103,11 +105,19 @@ def handle_message(db: Store, text: str, settings: Settings) -> str:
 
     if command in {"/start", "/help"}:
         return (
-            "Listner commands:\\n"
-            "/watch <numeric_user_id> [name] — add a listener\\n"
-            "/unwatch <numeric_user_id> — remove a listener\\n"
-            "/list — show all listeners\\n"
-            "/contacts — show Telegram contacts and numeric IDs"
+            "Listner Bot\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "Available Commands\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "👁 /watch <user_id> [name]\n"
+            "   Add a contact to the watch list.\n\n"
+            "🚫 /unwatch <user_id>\n"
+            "   Remove a contact from the watch list.\n\n"
+            "📋 /list\n"
+            "   Show all currently watched contacts.\n\n"
+            "👥 /contacts\n"
+            "   Show Telegram contacts with username and numeric user ID.\n\n"
+            "ℹ️ Tip: Use /contacts first, then copy the User ID into /watch."
         )
 
     if command in {"/watch", "/add"}:
