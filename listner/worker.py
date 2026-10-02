@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio, json, logging, urllib.parse, urllib.request
-from telethon import TelegramClient, StringSession, events, functions, types
+from telethon import TelegramClient, events, functions, types
+from telethon.sessions import StringSession
 from .config import Settings
 from .db import Store
 log = logging.getLogger(__name__)
