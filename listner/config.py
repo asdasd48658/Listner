@@ -23,6 +23,7 @@ class Settings:
     telegram_session: str = os.getenv("TELEGRAM_SESSION", "/data/telethon.session")
     bot_token: str | None = os.getenv("BOT_TOKEN")
     bot_chat_id: str | None = os.getenv("BOT_CHAT_ID")
+    bot_webhook_secret: str | None = os.getenv("BOT_WEBHOOK_SECRET")
     control_secret: str | None = os.getenv("CONTROL_SECRET")
 
     @property
