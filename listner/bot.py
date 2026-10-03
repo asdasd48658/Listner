@@ -56,11 +56,11 @@ def answer_callback(token: str, callback_id: str, text: str) -> None:
 
 
 def contact_keyboard(rows: list[tuple[str, str, int]]) -> list[list[dict[str, str]]]:
-    return [[{"text": f"👁 Watch {name}", "callback_data": f"watch:{user_id}"}] for _, name, user_id in rows]
+    return [[{"text": f"👁 /watch {name}", "callback_data": f"watch:{user_id}"}] for _, name, user_id in rows]
 
 
 def watched_keyboard(user_ids: list[int]) -> list[list[dict[str, str]]]:
-    return [[{"text": f"🚫 Unwatch {user_id}", "callback_data": f"unwatch:{user_id}"}] for user_id in user_ids]
+    return [[{"text": f"🚫 /unwatch {user_id}", "callback_data": f"unwatch:{user_id}"}] for user_id in user_ids]
 
 
 def command_and_args(text: str) -> tuple[str, list[str]]:
