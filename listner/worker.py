@@ -29,8 +29,6 @@ class ListnerWorker:
         if self._entity_miss_until.get(user_id, 0) > time.monotonic():
             return None
 
-        # First use Telegram's contacts. /contacts proves these entities are
-        # already available to the monitoring account and this request is cheap.
         if not self._contacts_loaded:
             try:
                 result = await self.client(functions.contacts.GetContactsRequest(hash=0))
@@ -54,8 +52,6 @@ class ListnerWorker:
         except Exception:
             pass
 
-        # Dialog lookup is a lightweight fallback for users the account has
-        # already encountered outside its contacts.
         try:
             dialogs = await self.client.get_dialogs(limit=None)
             for dialog in dialogs:
@@ -66,8 +62,6 @@ class ListnerWorker:
         except Exception as exc:
             log.debug("dialog entity lookup for %s failed: %s", user_id, exc)
 
-        # Only scan participants as a last resort. Never do this on every
-        # status poll for a contact because Telegram rate-limits the request.
         try:
             for group in self.db.groups():
                 group_entity = await self.client.get_entity(group["group_id"])
@@ -152,6 +146,25 @@ class ListnerWorker:
             return None
         return full.full_chat.call
 
+    @staticmethod
+    def call_participant_state(participant) -> tuple[bool, bool]:
+        """Return (mic_unmuted, camera_on) for a group-call participant.
+
+        V1 reports Telegram participant flags only:
+        muted=False means the microphone is unmuted, not that the person is
+        necessarily speaking. video_joined=True means the participant has
+        joined the video stream. If Telegram reports a paused video object,
+        it is treated as camera off.
+        """
+        mic_unmuted = getattr(participant, "muted", True) is False
+
+        video_joined = getattr(participant, "video_joined", False) is True
+        video = getattr(participant, "video", None)
+        video_paused = getattr(video, "paused", False) if video is not None else False
+        camera_on = video_joined and not video_paused
+
+        return mic_unmuted, camera_on
+
     async def scan_calls(self) -> None:
         for group in self.db.groups():
             try:
@@ -171,20 +184,58 @@ class ListnerWorker:
         while self.db.renew_monitor(group_id, call.id, owner, self.s.lease_seconds):
             try:
                 page = await self.client(functions.phone.GetGroupCallRequest(call=call, limit=100))
-                present = {p.peer.user_id for p in page.participants if isinstance(p.peer, types.PeerUser)}
-                log.info("call participants: group=%s call=%s count=%s watched_present=%s", group_id, call.id, len(present), sorted(set(self.db.watched()) & present))
-                for watched in self.db.watched():
+                participants = [
+                    p for p in page.participants
+                    if isinstance(p.peer, types.PeerUser)
+                ]
+                present = {p.peer.user_id for p in participants}
+                watched_ids = self.db.watched()
+                watched_present = sorted(set(watched_ids) & present)
+
+                log.info(
+                    "call participants: group=%s call=%s count=%s watched_present=%s",
+                    group_id, call.id, len(present), watched_present,
+                )
+
+                participant_by_user = {p.peer.user_id: p for p in participants}
+
+                for watched in watched_ids:
                     user = await self.resolve_watched_user(watched)
-                    if watched in present:
+                    is_present = watched in present
+
+                    if is_present:
+                        participant = participant_by_user[watched]
+                        mic_unmuted, camera_on = self.call_participant_state(participant)
                         contact_label = self.contact_label(watched, user)
+
+                        log.info(
+                            "V1 CALL STATE: group=%s title=%r call=%s user=%s "
+                            "present=true mic=%s camera=%s",
+                            group_id,
+                            title,
+                            call.id,
+                            contact_label,
+                            "ON" if mic_unmuted else "OFF",
+                            "ON" if camera_on else "OFF",
+                        )
+
                         join_time = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%H:%M:%S")
                         body = f"{contact_label} joined {title} at {join_time}"
                     else:
-                        contact_label = self.contact_label(watched, user)
-                        body = f"{contact_label} in {title}"
-                    change = self.db.record_presence(group_id, call.id, watched, watched in present, body)
+                        log.info(
+                            "V1 CALL STATE: group=%s title=%r call=%s user=%s "
+                            "present=false mic=OFF camera=OFF",
+                            group_id,
+                            title,
+                            call.id,
+                            self.contact_label(watched, user),
+                        )
+                        body = f"{self.contact_label(watched, user)} in {title}"
+
+                    change = self.db.record_presence(group_id, call.id, watched, is_present, body)
                     if change:
                         await self.deliver_alerts()
+
                 await asyncio.sleep(self.s.poll_seconds)
             except asyncio.CancelledError:
                 raise
