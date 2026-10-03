@@ -22,12 +22,29 @@ class ListnerWorker:
         self._contacts_users: list[types.User] = []
 
     async def resolve_watched_user(self, user_id: int):
-        """Resolve a watched numeric ID and cache the Telegram entity/access hash."""
+        """Resolve a watched numeric ID without repeatedly flooding Telegram."""
         cached = self._entity_cache.get(user_id)
         if cached is not None:
             return cached
         if self._entity_miss_until.get(user_id, 0) > time.monotonic():
             return None
+
+        # First use Telegram's contacts. /contacts proves these entities are
+        # already available to the monitoring account and this request is cheap.
+        if not self._contacts_loaded:
+            try:
+                result = await self.client(functions.contacts.GetContactsRequest(hash=0))
+                self._contacts_users = [u for u in result.users if isinstance(u, types.User)]
+                log.info("loaded %s Telegram contacts for watched-user resolution", len(self._contacts_users))
+            except Exception as exc:
+                log.warning("contact entity lookup failed: %s", exc)
+            finally:
+                self._contacts_loaded = True
+
+        for entity in self._contacts_users:
+            if getattr(entity, "id", None) == user_id:
+                self._entity_cache[user_id] = entity
+                return entity
 
         try:
             entity = await self.client.get_entity(user_id)
@@ -37,6 +54,8 @@ class ListnerWorker:
         except Exception:
             pass
 
+        # Dialog lookup is a lightweight fallback for users the account has
+        # already encountered outside its contacts.
         try:
             dialogs = await self.client.get_dialogs(limit=None)
             for dialog in dialogs:
@@ -47,53 +66,21 @@ class ListnerWorker:
         except Exception as exc:
             log.debug("dialog entity lookup for %s failed: %s", user_id, exc)
 
-        # A numeric Telegram ID is not independently resolvable unless the
-        # monitoring account already has an entity/access-hash for that user.
-        # If the user is in a group visible to this account, scan that group's
-        # participant list to obtain the entity and cache it.
+        # Only scan participants as a last resort. Never do this on every
+        # status poll for a contact because Telegram rate-limits the request.
         try:
-            dialogs = await self.client.get_dialogs(limit=None)
-            for dialog in dialogs:
-                group_entity = getattr(dialog, "entity", None)
+            for group in self.db.groups():
+                group_entity = await self.client.get_entity(group["group_id"])
                 if not isinstance(group_entity, (types.Channel, types.Chat)):
                     continue
-                try:
-                    participants = await self.client.get_participants(group_entity, limit=10000)
-                    for entity in participants:
-                        if isinstance(entity, types.User) and getattr(entity, "id", None) == user_id:
-                            self._entity_cache[user_id] = entity
-                            log.info("resolved watched user %s from dialog group %s", user_id, getattr(group_entity, "id", None))
-                            return entity
-                except Exception as exc:
-                    log.debug("dialog group participant lookup for watched user %s failed for %s: %s", user_id, getattr(group_entity, "id", None), exc)
+                participants = await self.client.get_participants(group_entity, limit=10000)
+                for entity in participants:
+                    if isinstance(entity, types.User) and getattr(entity, "id", None) == user_id:
+                        self._entity_cache[user_id] = entity
+                        log.info("resolved watched user %s from group %s", user_id, group["group_id"])
+                        return entity
         except Exception as exc:
-            log.debug("dialog group scan for watched user %s failed: %s", user_id, exc)
-
-        if not self._contacts_loaded:
-            try:
-                result = await self.client(functions.contacts.GetContactsRequest(hash=0))
-                self._contacts_users = [u for u in result.users if isinstance(u, types.User)]
-            except Exception as exc:
-                log.debug("contact entity lookup failed: %s", exc)
-            finally:
-                self._contacts_loaded = True
-        for entity in self._contacts_users:
-            if getattr(entity, "id", None) == user_id:
-                self._entity_cache[user_id] = entity
-                return entity
-
-        for group in self.db.groups():
-            try:
-                group_entity = await self.client.get_entity(group["group_id"])
-                if isinstance(group_entity, (types.Channel, types.Chat)):
-                    participants = await self.client.get_participants(group_entity, limit=10000)
-                    for entity in participants:
-                        if isinstance(entity, types.User) and getattr(entity, "id", None) == user_id:
-                            self._entity_cache[user_id] = entity
-                            log.info("resolved watched user %s from common group %s", user_id, group["group_id"])
-                            return entity
-            except Exception as exc:
-                log.debug("group entity lookup for watched user %s failed for group %s: %s", user_id, group["group_id"], exc)
+            log.debug("group participant lookup for watched user %s failed: %s", user_id, exc)
 
         self._entity_miss_until[user_id] = time.monotonic() + 60
         return None
@@ -125,7 +112,9 @@ class ListnerWorker:
             await self.deliver_alerts()
 
     async def poll_user_statuses(self) -> None:
-        for user_id in self.db.watched():
+        watched_ids = self.db.watched()
+        log.info("polling watched user statuses: count=%s ids=%s", len(watched_ids), watched_ids)
+        for user_id in watched_ids:
             try:
                 user = await self.resolve_watched_user(user_id)
                 if user is None:
