@@ -15,6 +15,18 @@ class ListnerWorker:
         session = StringSession(settings.telegram_session_string)
         self.client = TelegramClient(session, settings.telegram_api_id, settings.telegram_api_hash)
 
+    async def resolve_watched_user(self, user_id: int):
+        """Resolve a numeric ID through the logged-in account's contacts/cache."""
+        try:
+            return await self.client.get_entity(user_id)
+        except Exception:
+            pass
+        result = await self.client(functions.contacts.GetContactsRequest(hash=0))
+        for user in result.users:
+            if getattr(user, "id", None) == user_id:
+                return user
+        return None
+
     async def handle_user_update(self, event: events.UserUpdate.Event) -> None:
         if event.user_id not in self.db.watched() or event.status is None:
             return
@@ -25,7 +37,10 @@ class ListnerWorker:
     async def poll_user_statuses(self) -> None:
         for user_id in self.db.watched():
             try:
-                user = await self.client.get_entity(user_id)
+                user = await self.resolve_watched_user(user_id)
+                if user is None:
+                    log.warning("watched user %s could not be resolved; add the account to the monitoring account's contacts or use its username once", user_id)
+                    continue
                 status = getattr(user, "status", None)
                 if status is None:
                     continue
@@ -40,7 +55,10 @@ class ListnerWorker:
         """Use Telegram's GetCommonChats for every watched numeric account ID."""
         for user_id in self.db.watched():
             try:
-                user = await self.client.get_input_entity(user_id)
+                user = await self.resolve_watched_user(user_id)
+                if user is None:
+                    log.warning("common chats: watched user %s could not be resolved", user_id)
+                    continue
                 result = await self.client(functions.messages.GetCommonChatsRequest(user_id=user, max_id=0, limit=100))
                 for chat in result.chats: self.db.save_group(chat.id, getattr(chat, "title", str(chat.id)))
             except Exception as exc: log.warning("common chats lookup %s failed: %s", user_id, exc)
