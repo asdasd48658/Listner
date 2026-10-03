@@ -2,6 +2,8 @@ from __future__ import annotations
 import asyncio, json, logging, urllib.parse, urllib.request
 from telethon import TelegramClient, events, functions, types
 from telethon.sessions import StringSession
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from .config import Settings
 from .db import Store
 log = logging.getLogger(__name__)
@@ -98,8 +100,24 @@ class ListnerWorker:
                 present = {p.peer.user_id for p in page.participants if isinstance(p.peer, types.PeerUser)}
                 log.info("call participants: group=%s call=%s count=%s watched_present=%s", group_id, call.id, len(present), sorted(set(self.db.watched()) & present))
                 for watched in self.db.watched():
-                    change = self.db.record_presence(group_id, call.id, watched, watched in present, f"{watched} in {title}")
-                    if change: await self.deliver_alerts()
+                    if watched in present:
+                        try:
+                            user = await self.resolve_watched_user(watched)
+                        except Exception:
+                            user = None
+                        if user is not None:
+                            username = getattr(user, "username", None)
+                            name = " ".join(filter(None, [getattr(user, "first_name", None), getattr(user, "last_name", None)]))
+                            contact_label = f"@{username}" if username else (name or str(watched))
+                        else:
+                            contact_label = str(watched)
+                        join_time = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%H:%M:%S")
+                        body = f"{contact_label} joined {title} at {join_time}"
+                    else:
+                        body = f"{watched} in {title}"
+                    change = self.db.record_presence(group_id, call.id, watched, watched in present, body)
+                    if change:
+                        await self.deliver_alerts()
                 await asyncio.sleep(self.s.poll_seconds)
             except (asyncio.CancelledError,): raise
             except Exception as exc:
@@ -109,9 +127,9 @@ class ListnerWorker:
         if not (self.s.bot_token and self.s.bot_chat_id): return
         for alert in self.db.pending_alerts():
             if alert['kind'] == 'joined':
-                text = f"🔔 Watched user {alert['telegram_user_id']} joined: {alert['body']}"
+                text = f"🔴 LIVE — {alert['body']}"
             elif alert['kind'] == 'left':
-                text = f"👋 Watched user {alert['telegram_user_id']} left: {alert['body']}"
+                text = f"⚪ LIVE — {alert['body']}"
             else:
                 text = f"🟢 Watched user {alert['telegram_user_id']} is online" if alert['kind'] == 'online' else f"⚫ Watched user {alert['telegram_user_id']} is offline"
             try:
