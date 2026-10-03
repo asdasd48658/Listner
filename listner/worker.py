@@ -47,8 +47,6 @@ class ListnerWorker:
         except Exception as exc:
             log.debug("dialog entity lookup for %s failed: %s", user_id, exc)
 
-        # Load contacts at most once per worker. Repeating GetContactsRequest every
-        # poll caused Telegram flood-waits and prevented status polling from being useful.
         if not self._contacts_loaded:
             try:
                 result = await self.client(functions.contacts.GetContactsRequest(hash=0))
@@ -62,28 +60,33 @@ class ListnerWorker:
                 self._entity_cache[user_id] = entity
                 return entity
 
-        # A numeric Telegram ID alone has no access hash. If the watched user is
-        # in a known common group, Telegram can give us the full User entity there.
         for group in self.db.groups():
             try:
                 group_entity = await self.client.get_entity(group["group_id"])
-                if isinstance(group_entity, types.Channel):
+                if isinstance(group_entity, (types.Channel, types.Chat)):
                     participants = await self.client.get_participants(group_entity, limit=10000)
-                elif isinstance(group_entity, types.Chat):
-                    participants = await self.client.get_participants(group_entity, limit=10000)
-                else:
-                    continue
-                for entity in participants:
-                    if isinstance(entity, types.User) and getattr(entity, "id", None) == user_id:
-                        self._entity_cache[user_id] = entity
-                        log.info("resolved watched user %s from common group %s", user_id, group["group_id"])
-                        return entity
+                    for entity in participants:
+                        if isinstance(entity, types.User) and getattr(entity, "id", None) == user_id:
+                            self._entity_cache[user_id] = entity
+                            log.info("resolved watched user %s from common group %s", user_id, group["group_id"])
+                            return entity
             except Exception as exc:
                 log.debug("group entity lookup for watched user %s failed for group %s: %s", user_id, group["group_id"], exc)
 
-        # Do not hammer Telegram when an entity genuinely cannot be resolved.
         self._entity_miss_until[user_id] = time.monotonic() + 60
         return None
+
+    def contact_label(self, user_id: int, user=None) -> str:
+        """Prefer first name + last name for every live alert; never show numeric ID."""
+        entity = user or self._entity_cache.get(user_id)
+        if entity is not None:
+            name = " ".join(filter(None, [getattr(entity, "first_name", None), getattr(entity, "last_name", None)]))
+            if name:
+                return name
+            username = getattr(entity, "username", None)
+            if username:
+                return f"@{username}"
+        return "Unknown contact"
 
     async def handle_user_update(self, event: events.UserUpdate.Event) -> None:
         if event.user_id not in self.db.watched() or event.status is None:
@@ -110,7 +113,6 @@ class ListnerWorker:
                 log.warning("status lookup %s failed: %s", user_id, exc)
 
     async def discover_groups(self) -> None:
-        """Use Telegram's GetCommonChats for every watched numeric account ID."""
         for user_id in self.db.watched():
             try:
                 user = await self.resolve_watched_user(user_id)
@@ -118,8 +120,10 @@ class ListnerWorker:
                     log.warning("common chats: watched user %s could not be resolved", user_id)
                     continue
                 result = await self.client(functions.messages.GetCommonChatsRequest(user_id=user, max_id=0, limit=100))
-                for chat in result.chats: self.db.save_group(chat.id, getattr(chat, "title", str(chat.id)))
-            except Exception as exc: log.warning("common chats lookup %s failed: %s", user_id, exc)
+                for chat in result.chats:
+                    self.db.save_group(chat.id, getattr(chat, "title", str(chat.id)))
+            except Exception as exc:
+                log.warning("common chats lookup %s failed: %s", user_id, exc)
 
     async def get_active_call(self, entity):
         if isinstance(entity, types.Channel):
@@ -137,10 +141,7 @@ class ListnerWorker:
                 call = await self.get_active_call(entity)
                 if not call:
                     continue
-                owner = self.db.acquire_monitor(
-                    group["group_id"], call.id, call.access_hash,
-                    lease_seconds=self.s.lease_seconds,
-                )
+                owner = self.db.acquire_monitor(group["group_id"], call.id, call.access_hash, lease_seconds=self.s.lease_seconds)
                 if owner:
                     log.info("active call found: group=%s title=%s call=%s", group["group_id"], group["title"], call.id)
                     asyncio.create_task(self.monitor_call(group["group_id"], group["title"], call, owner))
@@ -148,7 +149,6 @@ class ListnerWorker:
                 log.warning("call scan %s failed: %s", group["group_id"], exc)
 
     async def monitor_call(self, group_id: int, title: str, call: types.InputGroupCall, owner: str) -> None:
-        """Only the successful database lease holder polls this exact group/call."""
         log.info("monitoring call %s/%s", group_id, call.id)
         while self.db.renew_monitor(group_id, call.id, owner, self.s.lease_seconds):
             try:
@@ -156,31 +156,27 @@ class ListnerWorker:
                 present = {p.peer.user_id for p in page.participants if isinstance(p.peer, types.PeerUser)}
                 log.info("call participants: group=%s call=%s count=%s watched_present=%s", group_id, call.id, len(present), sorted(set(self.db.watched()) & present))
                 for watched in self.db.watched():
+                    user = await self.resolve_watched_user(watched)
                     if watched in present:
-                        try:
-                            user = await self.resolve_watched_user(watched)
-                        except Exception:
-                            user = None
-                        if user is not None:
-                            username = getattr(user, "username", None)
-                            name = " ".join(filter(None, [getattr(user, "first_name", None), getattr(user, "last_name", None)]))
-                            contact_label = f"@{username}" if username else (name or str(watched))
-                        else:
-                            contact_label = str(watched)
+                        contact_label = self.contact_label(watched, user)
                         join_time = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%H:%M:%S")
                         body = f"{contact_label} joined {title} at {join_time}"
                     else:
-                        body = f"{watched} in {title}"
+                        contact_label = self.contact_label(watched, user)
+                        body = f"{contact_label} in {title}"
                     change = self.db.record_presence(group_id, call.id, watched, watched in present, body)
                     if change:
                         await self.deliver_alerts()
                 await asyncio.sleep(self.s.poll_seconds)
-            except (asyncio.CancelledError,): raise
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
-                log.info("call %s ended or unavailable: %s", call.id, exc); break
+                log.info("call %s ended or unavailable: %s", call.id, exc)
+                break
 
     async def deliver_alerts(self) -> None:
-        if not (self.s.bot_token and self.s.bot_chat_id): return
+        if not (self.s.bot_token and self.s.bot_chat_id):
+            return
         for alert in self.db.pending_alerts():
             if alert['kind'] == 'joined':
                 text = f"🔴 LIVE — {alert['body']}"
@@ -192,7 +188,8 @@ class ListnerWorker:
                 payload = urllib.parse.urlencode({'chat_id':self.s.bot_chat_id, 'text':text}).encode()
                 urllib.request.urlopen(f"https://api.telegram.org/bot{self.s.bot_token}/sendMessage", payload, timeout=10).read()
                 self.db.mark_delivered(alert['id'])
-            except Exception as exc: log.warning("alert delivery failed: %s", exc)
+            except Exception as exc:
+                log.warning("alert delivery failed: %s", exc)
 
     async def run(self) -> None:
         self.db.initialize()
@@ -204,11 +201,14 @@ class ListnerWorker:
         await self.client.catch_up()
         while True:
             await self.poll_user_statuses()
-            await self.discover_groups(); await self.scan_calls(); await self.deliver_alerts()
+            await self.discover_groups()
+            await self.scan_calls()
+            await self.deliver_alerts()
             await asyncio.sleep(max(5, self.s.poll_seconds))
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     asyncio.run(ListnerWorker(Settings()).run())
+
 if __name__ == '__main__':
     main()
