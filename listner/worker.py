@@ -1,5 +1,5 @@
 from __future__ import annotations
-import asyncio, json, logging, urllib.parse, urllib.request
+import asyncio, json, logging, urllib.parse, urllib.request, time
 from telethon import TelegramClient, events, functions, types
 from telethon.sessions import StringSession
 from datetime import datetime
@@ -16,16 +16,24 @@ class ListnerWorker:
             raise RuntimeError("TELEGRAM_SESSION_STRING is required on Render Free; generate an authenticated Telethon StringSession and set it in Render")
         session = StringSession(settings.telegram_session_string)
         self.client = TelegramClient(session, settings.telegram_api_id, settings.telegram_api_hash)
+        self._entity_cache: dict[int, types.User] = {}
+        self._entity_miss_until: dict[int, float] = {}
+        self._contacts_loaded = False
+        self._contacts_users: list[types.User] = []
 
     async def resolve_watched_user(self, user_id: int):
-        """Resolve a watched numeric ID from Telethon's known entities.
+        """Resolve a watched numeric ID and cache the Telegram entity/access hash."""
+        cached = self._entity_cache.get(user_id)
+        if cached is not None:
+            return cached
+        if self._entity_miss_until.get(user_id, 0) > time.monotonic():
+            return None
 
-        Telegram does not provide a globally resolvable user from a bare numeric
-        ID. Try the local entity cache first, then dialogs and contacts, which
-        populate the cache with the user's access hash.
-        """
         try:
-            return await self.client.get_entity(user_id)
+            entity = await self.client.get_entity(user_id)
+            if isinstance(entity, types.User):
+                self._entity_cache[user_id] = entity
+                return entity
         except Exception:
             pass
 
@@ -34,18 +42,47 @@ class ListnerWorker:
             for dialog in dialogs:
                 entity = getattr(dialog, "entity", None)
                 if isinstance(entity, types.User) and getattr(entity, "id", None) == user_id:
+                    self._entity_cache[user_id] = entity
                     return entity
         except Exception as exc:
             log.debug("dialog entity lookup for %s failed: %s", user_id, exc)
 
-        try:
-            result = await self.client(functions.contacts.GetContactsRequest(hash=0))
-            for user in result.users:
-                if isinstance(user, types.User) and getattr(user, "id", None) == user_id:
-                    return user
-        except Exception as exc:
-            log.debug("contact entity lookup for %s failed: %s", user_id, exc)
+        # Load contacts at most once per worker. Repeating GetContactsRequest every
+        # poll caused Telegram flood-waits and prevented status polling from being useful.
+        if not self._contacts_loaded:
+            try:
+                result = await self.client(functions.contacts.GetContactsRequest(hash=0))
+                self._contacts_users = [u for u in result.users if isinstance(u, types.User)]
+            except Exception as exc:
+                log.debug("contact entity lookup failed: %s", exc)
+            finally:
+                self._contacts_loaded = True
+        for entity in self._contacts_users:
+            if getattr(entity, "id", None) == user_id:
+                self._entity_cache[user_id] = entity
+                return entity
 
+        # A numeric Telegram ID alone has no access hash. If the watched user is
+        # in a known common group, Telegram can give us the full User entity there.
+        for group in self.db.groups():
+            try:
+                group_entity = await self.client.get_entity(group["group_id"])
+                if isinstance(group_entity, types.Channel):
+                    participants = await self.client.get_participants(group_entity, limit=10000)
+                elif isinstance(group_entity, types.Chat):
+                    participants = await self.client.get_participants(group_entity, limit=10000)
+                else:
+                    continue
+                for entity in participants:
+                    if isinstance(entity, types.User) and getattr(entity, "id", None) == user_id:
+                        self._entity_cache[user_id] = entity
+                        log.info("resolved watched user %s from common group %s", user_id, group["group_id"])
+                        return entity
+            except Exception as exc:
+                log.debug("group entity lookup for watched user %s failed for group %s: %s", user_id, group["group_id"], exc)
+
+        # Do not hammer Telegram when an entity genuinely cannot be resolved.
+        self._entity_miss_until[user_id] = time.monotonic() + 60
         return None
 
     async def handle_user_update(self, event: events.UserUpdate.Event) -> None:
@@ -156,6 +193,7 @@ class ListnerWorker:
                 urllib.request.urlopen(f"https://api.telegram.org/bot{self.s.bot_token}/sendMessage", payload, timeout=10).read()
                 self.db.mark_delivered(alert['id'])
             except Exception as exc: log.warning("alert delivery failed: %s", exc)
+
     async def run(self) -> None:
         self.db.initialize()
         self.client.add_event_handler(self.handle_user_update, events.UserUpdate)
@@ -172,4 +210,5 @@ class ListnerWorker:
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     asyncio.run(ListnerWorker(Settings()).run())
-if __name__ == '__main__': main()
+if __name__ == '__main__':
+    main()
