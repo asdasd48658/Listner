@@ -93,21 +93,22 @@ def format_contact_table(rows: list[tuple[str, str, int]]) -> str:
     return "\n".join(lines)
 
 
-def contact_list(settings: Settings) -> str:
+def contact_list(settings: Settings) -> tuple[str, list[list[dict[str, str]]]]:
     users = asyncio.run(_telegram_contacts(settings))
     if not users:
-        return "Telegram Contacts: none"
+        return "Telegram Contacts: none", []
     rows = []
     for user in users:
         name = " ".join(x for x in (user.first_name, user.last_name) if x) or "(no name)"
         username = f"@{user.username}" if user.username else "(none)"
         rows.append((username, name, user.id))
-    return "Telegram Contacts\n\n" + format_contact_table(rows) + "\n\nUse: /watch <user_id> [name]"
+    text = "Telegram Contacts\n\n" + format_contact_table(rows) + "\n\nTap Watch to add a contact."
+    return text, contact_keyboard(rows)
 
 
-def watched_list(settings: Settings, user_ids: list[int]) -> str:
+def watched_list(settings: Settings, user_ids: list[int]) -> tuple[str, list[list[dict[str, str]]]]:
     if not user_ids:
-        return "Listeners: none"
+        return "Listeners: none", []
     try:
         users = asyncio.run(_telegram_contacts(settings))
         by_id = {user.id: user for user in users}
@@ -123,7 +124,7 @@ def watched_list(settings: Settings, user_ids: list[int]) -> str:
         else:
             username, name = "(unknown)", "(unknown)"
         rows.append((username, name, user_id))
-    return "Listeners\n\n" + format_contact_table(rows)
+    return "Listeners\n\n" + format_contact_table(rows), watched_keyboard(user_ids)
 
 
 def handle_message(db: Store, text: str, settings: Settings) -> str:
@@ -166,9 +167,9 @@ def handle_message(db: Store, text: str, settings: Settings) -> str:
         removed = db.remove_watched(user_id)
         return f"Removed {user_id}" if removed else f"{user_id} was not in the listener list"
 
-    if command == "/contacts":
+    if command in {"/contact", "/contacts"}:
         try:
-            return contact_list(settings)
+            return contact_list(settings)[0]
         except Exception as exc:
             log.exception("Failed to fetch Telegram contacts")
             return f"Could not fetch Telegram contacts: {exc}"
@@ -180,7 +181,7 @@ def handle_message(db: Store, text: str, settings: Settings) -> str:
         log.info("Listener list loaded: count=%d elapsed=%.3fs", len(users), time.monotonic() - started)
         if not users:
             return "Listeners: none"
-        return watched_list(settings, users)
+        return watched_list(settings, users)[0]
 
     log.warning("Unknown bot command: %s args=%s", command, args)
     return "Unknown command. Send /start for the available commands."
@@ -201,11 +202,42 @@ def main():
             updates = request(
                 s.bot_token,
                 "getUpdates",
-                {"offset": offset, "timeout": 25, "allowed_updates": json.dumps(["message"])},
+                {"offset": offset, "timeout": 25, "allowed_updates": json.dumps(["message", "callback_query"])},
             ).get("result", [])
             log.info("Telegram poll returned %d update(s)", len(updates))
             for update in updates:
                 offset = update["update_id"] + 1
+                callback = update.get("callback_query")
+                if callback:
+                    message = callback.get("message", {})
+                    chat = str(message.get("chat", {}).get("id", ""))
+                    data = callback.get("data", "")
+                    log.info("Received callback update=%s chat=%s data=%r", update.get("update_id"), chat, data)
+                    if not chat:
+                        log.warning("Ignoring callback without chat id")
+                        continue
+                    if s.bot_chat_id and chat != s.bot_chat_id:
+                        log.warning("Ignoring callback chat=%s because BOT_CHAT_ID is configured", chat)
+                        continue
+                    try:
+                        if data.startswith("watch:") and data[6:].lstrip("-").isdigit():
+                            user_id = int(data[6:])
+                            reply = handle_message(db, f"/watch {user_id}", s)
+                        elif data.startswith("unwatch:") and data[8:].lstrip("-").isdigit():
+                            user_id = int(data[8:])
+                            reply = handle_message(db, f"/unwatch {user_id}", s)
+                        else:
+                            reply = "Unknown action"
+                        answer_callback(s.bot_token, callback.get("id", ""), reply)
+                        send_reply(s.bot_token, chat, reply)
+                    except Exception:
+                        log.exception("Failed to process callback: %r", data)
+                        try:
+                            answer_callback(s.bot_token, callback.get("id", ""), "Listner error")
+                        except Exception:
+                            log.exception("Failed to answer callback")
+                    continue
+
                 message = update.get("message", {})
                 chat = str(message.get("chat", {}).get("id", ""))
                 text = message.get("text", "")
@@ -217,9 +249,18 @@ def main():
                     log.warning("Ignoring chat=%s because BOT_CHAT_ID is configured", chat)
                     continue
                 try:
+                    command, _ = command_and_args(text)
                     reply = handle_message(db, text, s)
+                    keyboard = None
+                    if command in {"/contact", "/contacts"} and reply != "Telegram Contacts: none":
+                        try:
+                            _, keyboard = contact_list(s)
+                        except Exception:
+                            keyboard = None
+                    elif command == "/list" and reply != "Listeners: none":
+                        keyboard = watched_keyboard(db.watched())
                     log.info("Command %r produced reply=%r", text, reply)
-                    send_reply(s.bot_token, chat, reply)
+                    send_reply(s.bot_token, chat, reply, keyboard)
                 except Exception:
                     log.exception("Failed to process bot command: %r", text)
                     try:
