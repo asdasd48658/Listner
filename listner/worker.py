@@ -47,6 +47,28 @@ class ListnerWorker:
         except Exception as exc:
             log.debug("dialog entity lookup for %s failed: %s", user_id, exc)
 
+        # A numeric Telegram ID is not independently resolvable unless the
+        # monitoring account already has an entity/access-hash for that user.
+        # If the user is in a group visible to this account, scan that group's
+        # participant list to obtain the entity and cache it.
+        try:
+            dialogs = await self.client.get_dialogs(limit=None)
+            for dialog in dialogs:
+                group_entity = getattr(dialog, "entity", None)
+                if not isinstance(group_entity, (types.Channel, types.Chat)):
+                    continue
+                try:
+                    participants = await self.client.get_participants(group_entity, limit=10000)
+                    for entity in participants:
+                        if isinstance(entity, types.User) and getattr(entity, "id", None) == user_id:
+                            self._entity_cache[user_id] = entity
+                            log.info("resolved watched user %s from dialog group %s", user_id, getattr(group_entity, "id", None))
+                            return entity
+                except Exception as exc:
+                    log.debug("dialog group participant lookup for watched user %s failed for %s: %s", user_id, getattr(group_entity, "id", None), exc)
+        except Exception as exc:
+            log.debug("dialog group scan for watched user %s failed: %s", user_id, exc)
+
         if not self._contacts_loaded:
             try:
                 result = await self.client(functions.contacts.GetContactsRequest(hash=0))
@@ -89,9 +111,16 @@ class ListnerWorker:
         return "Unknown contact"
 
     async def handle_user_update(self, event: events.UserUpdate.Event) -> None:
-        if event.user_id not in self.db.watched() or event.status is None:
+        watched = self.db.watched()
+        log.info(
+            "Telegram UserUpdate received: user=%s online=%s status=%r watched=%s",
+            event.user_id,
+            event.online,
+            event.status,
+            event.user_id in watched,
+        )
+        if event.user_id not in watched or event.status is None:
             return
-        log.info("Telegram status update: user=%s online=%s", event.user_id, event.online)
         if self.db.record_online_status(event.user_id, event.online):
             await self.deliver_alerts()
 
