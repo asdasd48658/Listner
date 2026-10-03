@@ -18,15 +18,34 @@ class ListnerWorker:
         self.client = TelegramClient(session, settings.telegram_api_id, settings.telegram_api_hash)
 
     async def resolve_watched_user(self, user_id: int):
-        """Resolve a numeric ID through the logged-in account's contacts/cache."""
+        """Resolve a watched numeric ID from Telethon's known entities.
+
+        Telegram does not provide a globally resolvable user from a bare numeric
+        ID. Try the local entity cache first, then dialogs and contacts, which
+        populate the cache with the user's access hash.
+        """
         try:
             return await self.client.get_entity(user_id)
         except Exception:
             pass
-        result = await self.client(functions.contacts.GetContactsRequest(hash=0))
-        for user in result.users:
-            if getattr(user, "id", None) == user_id:
-                return user
+
+        try:
+            dialogs = await self.client.get_dialogs(limit=None)
+            for dialog in dialogs:
+                entity = getattr(dialog, "entity", None)
+                if isinstance(entity, types.User) and getattr(entity, "id", None) == user_id:
+                    return entity
+        except Exception as exc:
+            log.debug("dialog entity lookup for %s failed: %s", user_id, exc)
+
+        try:
+            result = await self.client(functions.contacts.GetContactsRequest(hash=0))
+            for user in result.users:
+                if isinstance(user, types.User) and getattr(user, "id", None) == user_id:
+                    return user
+        except Exception as exc:
+            log.debug("contact entity lookup for %s failed: %s", user_id, exc)
+
         return None
 
     async def handle_user_update(self, event: events.UserUpdate.Event) -> None:
