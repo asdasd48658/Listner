@@ -55,14 +55,17 @@ def answer_callback(token: str, callback_id: str, text: str) -> None:
     request(token, "answerCallbackQuery", {"callback_query_id": callback_id, "text": text})
 
 
-def contact_keyboard(rows: list[tuple[str, str, int]]) -> list[list[dict[str, str]]]:
-    return [[{"text": f"👁 /watch {name}", "callback_data": f"watch:{user_id}"}] for _, name, user_id in rows]
+def contact_keyboard(rows: list[tuple[str, str, int, bool]]) -> list[list[dict[str, str]]]:
+    keyboard = []
+    for _, name, user_id, watched in rows:
+        label = f"🚫 /unwatch {name}" if watched else f"👁 /watch {name}"
+        action = f"unwatch:{user_id}" if watched else f"watch:{user_id}"
+        keyboard.append([{"text": label, "callback_data": action}])
+    return keyboard
 
 
 def watched_keyboard(user_ids: list[int]) -> list[list[dict[str, str]]]:
     return [[{"text": f"🚫 /unwatch {user_id}", "callback_data": f"unwatch:{user_id}"}] for user_id in user_ids]
-
-
 def command_and_args(text: str) -> tuple[str, list[str]]:
     words = (text or "").split()
     if not words:
@@ -108,17 +111,23 @@ def format_contact_table(rows: list[tuple[str, str, int]]) -> str:
     return "\n".join(lines)
 
 
-def contact_list(settings: Settings) -> tuple[str, list[list[dict[str, str]]]]:
+def contact_list(settings: Settings, watched_ids: list[int]) -> tuple[str, list[list[dict[str, str]]]]:
     users = asyncio.run(_telegram_contacts(settings))
     if not users:
         return "Telegram Contacts: none", []
+    watched_set = set(watched_ids)
     rows = []
     for user in users:
         name = " ".join(x for x in (user.first_name, user.last_name) if x) or "(no name)"
         username = f"@{user.username}" if user.username else "(none)"
-        rows.append((username, name, user.id))
-    text = "Telegram Contacts\n\n" + format_contact_table(rows) + "\n\nTap Watch to add a contact."
-    return text, contact_keyboard(rows)
+        rows.append((username, name, user.id, user.id in watched_set))
+    lines = ["Telegram Contacts", ""]
+    for username, name, user_id, watched in rows:
+        state = "👁 WATCHING" if watched else "○ not watched"
+        lines.append(f"{username} | {name} | {user_id} | {state}")
+    lines.append("")
+    lines.append("Use the button beside each contact to watch or unwatch.")
+    return "\n".join(lines), contact_keyboard(rows)
 
 
 def watched_list(settings: Settings, user_ids: list[int]) -> tuple[str, list[list[dict[str, str]]]]:
@@ -130,18 +139,16 @@ def watched_list(settings: Settings, user_ids: list[int]) -> tuple[str, list[lis
     except Exception:
         log.exception("Failed to fetch contacts while formatting /list")
         by_id = {}
-    rows = []
+    lines = ["Listeners", ""]
     for user_id in user_ids:
         user = by_id.get(user_id)
         if user:
-            name = " ".join(x for x in (user.first_name, user.last_name) if x) or "(no name)"
             username = f"@{user.username}" if user.username else "(none)"
+            name = " ".join(x for x in (user.first_name, user.last_name) if x) or "(no name)"
         else:
             username, name = "(unknown)", "(unknown)"
-        rows.append((username, name, user_id))
-    return "Listeners\n\n" + format_contact_table(rows), watched_keyboard(user_ids)
-
-
+        lines.append(f"{username} | {name} | {user_id}")
+    return "\n".join(lines), watched_keyboard(user_ids)
 def handle_message(db: Store, text: str, settings: Settings) -> str:
     command, args = command_and_args(text)
     log.info("Handling command: %s args=%s", command, args)
@@ -184,7 +191,7 @@ def handle_message(db: Store, text: str, settings: Settings) -> str:
 
     if command in {"/contact", "/contacts"}:
         try:
-            return contact_list(settings)[0]
+            return contact_list(settings, db.watched())[0]
         except Exception as exc:
             log.exception("Failed to fetch Telegram contacts")
             return f"Could not fetch Telegram contacts: {exc}"
@@ -269,7 +276,7 @@ def main():
                     keyboard = None
                     if command in {"/contact", "/contacts"} and reply != "Telegram Contacts: none":
                         try:
-                            _, keyboard = contact_list(s)
+                            _, keyboard = contact_list(s, db.watched())
                         except Exception:
                             keyboard = None
                     elif command == "/list" and reply != "Listeners: none":
