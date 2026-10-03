@@ -43,9 +43,24 @@ def request(token: str, method: str, data: dict):
     return result
 
 
-def send_reply(token: str, chat_id: str, text: str) -> None:
+def send_reply(token: str, chat_id: str, text: str, keyboard: list[list[dict[str, str]]] | None = None) -> None:
     log.info("Sending reply to chat=%s: %s", chat_id, text.replace("\\n", " | "))
-    request(token, "sendMessage", {"chat_id": chat_id, "text": text})
+    data = {"chat_id": chat_id, "text": text}
+    if keyboard:
+        data["reply_markup"] = json.dumps({"inline_keyboard": keyboard})
+    request(token, "sendMessage", data)
+
+
+def answer_callback(token: str, callback_id: str, text: str) -> None:
+    request(token, "answerCallbackQuery", {"callback_query_id": callback_id, "text": text})
+
+
+def contact_keyboard(rows: list[tuple[str, str, int]]) -> list[list[dict[str, str]]]:
+    return [[{"text": f"👁 Watch {name}", "callback_data": f"watch:{user_id}"}] for _, name, user_id in rows]
+
+
+def watched_keyboard(user_ids: list[int]) -> list[list[dict[str, str]]]:
+    return [[{"text": f"🚫 Unwatch {user_id}", "callback_data": f"unwatch:{user_id}"}] for user_id in user_ids]
 
 
 def command_and_args(text: str) -> tuple[str, list[str]]:
