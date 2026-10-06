@@ -1,0 +1,52 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "listner",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-06",
+  "observability": {
+    "enabled": true
+  },
+  "containers": [
+    {
+      "class_name": "ListnerContainer",
+      "scheduling_policy": "default",
+      "image": "./Dockerfile",
+      "instance_type": "standard-1",
+      "max_instances": 1,
+      "rollout_active_grace_period": 60
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "LISTNER_CONTAINER",
+        "class_name": "ListnerContainer"
+      }
+    ]
+  },
+  "exports": {
+    "ListnerContainer": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  },
+  "vars": {
+    "POLL_SECONDS": "2",
+    "LEASE_SECONDS": "10",
+    "PORT": "8080"
+  },
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
+  "secrets": {
+    "required": [
+      "TELEGRAM_API_ID",
+      "TELEGRAM_API_HASH",
+      "TELEGRAM_SESSION_STRING",
+      "DATABASE_URL",
+      "BOT_TOKEN",
+      "BOT_CHAT_ID",
+      "CONTROL_SECRET"
+    ]
+  }
+}
