@@ -1,5 +1,19 @@
 {
-  "name": "listner-control-api",
+  "name": "listner-cloudflare",
   "private": true,
-  "scripts": { "test": "python -m unittest discover -s tests -v", "typecheck": "python -m compileall -q listner api" }
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "0.3.7"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20261006.0",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.147.0"
+  }
 }
