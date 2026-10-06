@@ -23,14 +23,14 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.end_headers()
-        self.wfile.write(b"Listner OK\\n")
+        self.wfile.write(b"Listner OK\n")
 
     def log_message(self, _format: str, *_args: object) -> None:
         return
 
 
 def start_health_server() -> ThreadingHTTPServer:
-    port = int(os.getenv("PORT", "10000"))
+    port = int(os.getenv("PORT", "8080"))
     server = ThreadingHTTPServer(("0.0.0.0", port), HealthHandler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     print(f"supervisor: health server listening on {port}", flush=True)
